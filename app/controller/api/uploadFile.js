@@ -3,7 +3,7 @@
  * @Date: 2019-11-20 10:07:42 
  * @Description local 本地，qn 七牛，oss 阿里云oss
  * @Last Modified by: doramart
- * @Last Modified time: 2019-11-21 15:22:32
+ * @Last Modified time: 2019-12-16 23:22:46
  */
 
 const qiniu = require("qiniu");
@@ -182,7 +182,7 @@ let uploadByAliOss = async (stream, targetKey, uploadConfigInfo) => {
         });
 
         let result = await clientOss.putStream(targetKey, stream);
-
+        // console.log('--result--', result);
         let targetUrl = result.url;
         if (targetUrl.indexOf('http://') >= 0) {
             targetUrl = targetUrl.replace('http://', 'https://');
@@ -217,11 +217,10 @@ let getFileInfoByStream = (ctx, uploadOptions, stream) => {
         if (!extname) {
             throw new Error(res.__('validate_error_params'));
         }
-        // 生成文件名
-        // let ms = (new Date()).getTime().toString() + extname;
+
         return {
             uploadForder,
-            uploadFileName: newFileName,
+            uploadFileName: newFileName + extname,
             fileName,
             fileType: extname
         }
@@ -307,12 +306,14 @@ let UploadFileController = {
                     await sendToWormhole(stream)
                     throw err
                 }
-                returnPath = `${app.config.server_path}${app.config.static.prefix}/${uploadForder}/${uploadFileName}`;
+                returnPath = `${app.config.static.prefix}/${uploadForder}/${uploadFileName}`;
             } else if (uploadConfigInfo.type == 'qn') {
-                let targetKey = path.join(uploadForder, `${uploadFileName}`)
+                let currentUploadForder = options.static_root_path ? `${options.static_root_path}/${uploadForder}` : uploadForder;
+                let targetKey = path.join(currentUploadForder, `${uploadFileName}`)
                 returnPath = await uploadByQiniu(stream, targetKey, uploadConfigInfo);
             } else if (uploadConfigInfo.type == 'oss') {
-                let targetKey = path.join(uploadForder, `${uploadFileName}`)
+                let currentUploadForder = options.static_root_path ? `${options.static_root_path}/${uploadForder}` : uploadForder;
+                let targetKey = path.join(currentUploadForder, `${uploadFileName}`)
                 returnPath = await uploadByAliOss(stream, targetKey, uploadConfigInfo);
             }
 
@@ -444,7 +445,8 @@ let UploadFileController = {
                                     uploadForder,
                                     uploadFileName
                                 } = beforeUploadFileInfo;
-                                let targetKey = path.join(uploadForder, `${uploadFileName}`)
+                                let currentUploadForder = options.static_root_path ? `${options.static_root_path}/${uploadForder}` : uploadForder;
+                                let targetKey = path.join(currentUploadForder, `${uploadFileName}`)
                                 beforeUploadFileInfo.url = await uploadByAliOss(fileStream, targetKey, uploadConfigInfo);
                                 result = Object.assign({
                                     state: 'SUCCESS'
@@ -459,7 +461,8 @@ let UploadFileController = {
                                     uploadForder,
                                     uploadFileName
                                 } = beforeUploadFileInfo;
-                                let targetKey = path.join(uploadForder, `${uploadFileName}`)
+                                let currentUploadForder = options.static_root_path ? `${options.static_root_path}/${uploadForder}` : uploadForder;
+                                let targetKey = path.join(currentUploadForder, `${uploadFileName}`)
                                 beforeUploadFileInfo.url = await uploadByQiniu(fileStream, targetKey, uploadConfigInfo);
                                 result = Object.assign({
                                     state: 'SUCCESS'
