@@ -3,7 +3,7 @@
  * @Date: 2019-11-20 10:07:42 
  * @Description local 本地，qn 七牛，oss 阿里云oss
  * @Last Modified by: doramart
- * @Last Modified time: 2019-11-21 15:22:32
+ * @Last Modified time: 2020-04-01 12:52:15
  */
 
 const qiniu = require("qiniu");
@@ -115,7 +115,7 @@ async function _getUploadInfoByType(ctx, app) {
 }
 
 // 上传到七牛云存储
-let uploadByQiniu = (readableStream, targetKey, uploadConfigInfo) => {
+let uploadByQiniu = (dataType, readableStream, targetKey, uploadConfigInfo) => {
     return new Promise((resolve, reject) => {
         var config = new qiniu.conf.Config();
         const {
@@ -144,28 +144,50 @@ let uploadByQiniu = (readableStream, targetKey, uploadConfigInfo) => {
         var formUploader = new qiniu.form_up.FormUploader(config);
         var putExtra = new qiniu.form_up.PutExtra();
 
-        formUploader.putStream(uploadToken, targetKey, readableStream, putExtra, function (respErr,
-            respBody, respInfo) {
-            if (respErr) {
-                reject(respErr);
-            }
-            if (respInfo.statusCode == 200) {
-                console.log(respBody);
-                if (!_.isEmpty(respBody) && qn_endPoint) {
-                    resolve(`${qn_endPoint}/${respBody.key}`)
-                } else {
-                    reject('Upload qiniu failed');
+        if (dataType == 'stream') {
+            formUploader.putStream(uploadToken, targetKey, readableStream, putExtra, function (respErr,
+                respBody, respInfo) {
+                if (respErr) {
+                    reject(respErr);
                 }
-            } else {
-                reject('Upload qiniu failed', respBody);
-            }
-        });
+                if (respInfo.statusCode == 200) {
+                    console.log(respBody);
+                    if (!_.isEmpty(respBody) && qn_endPoint) {
+                        resolve(`${qn_endPoint}/${respBody.key}`)
+                    } else {
+                        reject('Upload qiniu failed');
+                    }
+                } else {
+                    reject('Upload qiniu failed', respBody);
+                }
+            });
+        } else if (dataType == 'realPath') {
+            formUploader.putFile(uploadToken, targetKey, readableStream, putExtra, function (respErr,
+                respBody, respInfo) {
+                if (respErr) {
+                    reject(respErr);
+                }
+                if (respInfo.statusCode == 200) {
+                    console.log(respBody);
+                    if (!_.isEmpty(respBody) && qn_endPoint) {
+                        // TODO 本地不留存
+                        fs.unlinkSync(readableStream);
+                        resolve(`${qn_endPoint}/${respBody.key}`)
+                    } else {
+                        reject('Upload qiniu failed');
+                    }
+                } else {
+                    reject('Upload qiniu failed', respBody);
+                }
+            });
+        }
+
 
     })
 }
 
 // 上传到阿里云oss
-let uploadByAliOss = async (stream, targetKey, uploadConfigInfo) => {
+let uploadByAliOss = async (dataType, stream, targetKey, uploadConfigInfo) => {
 
     try {
         const {
@@ -181,8 +203,15 @@ let uploadByAliOss = async (stream, targetKey, uploadConfigInfo) => {
             accessKeySecret: oss_secretKey
         });
 
-        let result = await clientOss.putStream(targetKey, stream);
-
+        let result;
+        if (dataType == 'stream') {
+            result = await clientOss.putStream(targetKey, stream);
+        } else if (dataType == 'realPath') {
+            result = await clientOss.put(targetKey, stream);
+            // TODO 本地不留存
+            fs.unlinkSync(stream);
+        }
+        // console.log('--result--', result);
         let targetUrl = result.url;
         if (targetUrl.indexOf('http://') >= 0) {
             targetUrl = targetUrl.replace('http://', 'https://');
@@ -217,11 +246,45 @@ let getFileInfoByStream = (ctx, uploadOptions, stream) => {
         if (!extname) {
             throw new Error(res.__('validate_error_params'));
         }
-        // 生成文件名
-        // let ms = (new Date()).getTime().toString() + extname;
+
         return {
             uploadForder,
-            uploadFileName: newFileName,
+            uploadFileName: newFileName + extname,
+            fileName,
+            fileType: extname
+        }
+
+    } else {
+        throw new Error(ctx.__('validate_error_params'));
+    }
+
+}
+
+let getFileInfoByRealPath = (ctx, uploadOptions, fileInfo) => {
+
+    const {
+        conf,
+        uploadType
+    } = getUploadConfig(uploadOptions);
+
+    let askFileType = 'uploadimage'; // 默认上传图片
+
+    if (Object.keys(uploadType).includes(askFileType)) {
+        const actionName = uploadType[askFileType]
+        let pathFormat = setFullPath(conf[actionName + 'PathFormat']).split('/')
+        let newFileName = pathFormat.pop()
+
+        let uploadForder = path.join('.', ...pathFormat);
+        // 所有表单字段都能通过 `stream.fields` 获取到
+        const fileName = path.basename(fileInfo.filename) // 文件名称
+        const extname = path.extname(fileInfo.filename).toLowerCase() // 文件扩展名称
+        if (!extname) {
+            throw new Error(res.__('validate_error_params'));
+        }
+
+        return {
+            uploadForder,
+            uploadFileName: newFileName + extname,
             fileName,
             fileType: extname
         }
@@ -281,7 +344,7 @@ let UploadFileController = {
         try {
             //存放路径
             let options = !_.isEmpty(app.config.doraUploadFile.uploadFileFormat) ? app.config.doraUploadFile.uploadFileFormat : {};
-
+            let dataType = 'stream';
             let uploadPath, returnPath;
             let uploadConfigInfo = await _getUploadInfoByType(ctx, app);
             const stream = await ctx.getFileStream();
@@ -307,13 +370,15 @@ let UploadFileController = {
                     await sendToWormhole(stream)
                     throw err
                 }
-                returnPath = `${app.config.server_path}${app.config.static.prefix}/${uploadForder}/${uploadFileName}`;
+                returnPath = `${app.config.static.prefix}/${uploadForder}/${uploadFileName}`;
             } else if (uploadConfigInfo.type == 'qn') {
-                let targetKey = path.join(uploadForder, `${uploadFileName}`)
-                returnPath = await uploadByQiniu(stream, targetKey, uploadConfigInfo);
+                let currentUploadForder = options.static_root_path ? `${options.static_root_path}/${uploadForder}` : uploadForder;
+                let targetKey = path.join(currentUploadForder, `${uploadFileName}`)
+                returnPath = await uploadByQiniu(dataType, stream, targetKey, uploadConfigInfo);
             } else if (uploadConfigInfo.type == 'oss') {
-                let targetKey = path.join(uploadForder, `${uploadFileName}`)
-                returnPath = await uploadByAliOss(stream, targetKey, uploadConfigInfo);
+                let currentUploadForder = options.static_root_path ? `${options.static_root_path}/${uploadForder}` : uploadForder;
+                let targetKey = path.join(currentUploadForder, `${uploadFileName}`)
+                returnPath = await uploadByAliOss(dataType, stream, targetKey, uploadConfigInfo);
             }
 
             // 设置响应内容和响应状态码
@@ -335,7 +400,7 @@ let UploadFileController = {
     async ueditor(ctx, app, next) {
 
         try {
-
+            const dataType = 'stream';
             let options = !_.isEmpty(app.config.doraUploadFile.uploadFileFormat) ? app.config.doraUploadFile.uploadFileFormat : {};
             let uploadConfigInfo = await _getUploadInfoByType(ctx, app);
             const publicDir = options.upload_path || (process.cwd() + '/app/public');
@@ -444,8 +509,9 @@ let UploadFileController = {
                                     uploadForder,
                                     uploadFileName
                                 } = beforeUploadFileInfo;
-                                let targetKey = path.join(uploadForder, `${uploadFileName}`)
-                                beforeUploadFileInfo.url = await uploadByAliOss(fileStream, targetKey, uploadConfigInfo);
+                                let currentUploadForder = options.static_root_path ? `${options.static_root_path}/${uploadForder}` : uploadForder;
+                                let targetKey = path.join(currentUploadForder, `${uploadFileName}`)
+                                beforeUploadFileInfo.url = await uploadByAliOss(dataType, fileStream, targetKey, uploadConfigInfo);
                                 result = Object.assign({
                                     state: 'SUCCESS'
                                 }, beforeUploadFileInfo)
@@ -459,8 +525,9 @@ let UploadFileController = {
                                     uploadForder,
                                     uploadFileName
                                 } = beforeUploadFileInfo;
-                                let targetKey = path.join(uploadForder, `${uploadFileName}`)
-                                beforeUploadFileInfo.url = await uploadByQiniu(fileStream, targetKey, uploadConfigInfo);
+                                let currentUploadForder = options.static_root_path ? `${options.static_root_path}/${uploadForder}` : uploadForder;
+                                let targetKey = path.join(currentUploadForder, `${uploadFileName}`)
+                                beforeUploadFileInfo.url = await uploadByQiniu(dataType, fileStream, targetKey, uploadConfigInfo);
                                 result = Object.assign({
                                     state: 'SUCCESS'
                                 }, beforeUploadFileInfo)
@@ -485,7 +552,7 @@ let UploadFileController = {
                                     allowfiles: conf[actionName + 'AllowFiles']
                                 }, options || {}).single(conf[actionName + 'FieldName'])(ctx, next)
                                 resInfo = upload.fileFormat(ctx.req.file)
-                                resInfo.url = ctx.protocol + '://' + ctx.host + publicUrlDir + resInfo.url;
+                                resInfo.url = publicUrlDir + resInfo.url;
                                 result = Object.assign({
                                     state: 'SUCCESS'
                                 }, resInfo)
@@ -534,7 +601,54 @@ let UploadFileController = {
                 state: 'FAIL'
             })
         }
-    }
+    },
+
+    // 通过已知文件路径上传
+    async createFileByPath(ctx, app) {
+
+        try {
+            //存放路径
+            let options = !_.isEmpty(app.config.doraUploadFile.uploadFileFormat) ? app.config.doraUploadFile.uploadFileFormat : {};
+            let fields = ctx.request.body || {};
+            let imgPath = fields.imgPath;
+            let localImgPath = fields.localImgPath;
+            let fileDataType = 'realPath';
+
+            let uploadPath, returnPath;
+            let uploadConfigInfo = await _getUploadInfoByType(ctx, app);
+            let beforeUploadFileInfo = await getFileInfoByRealPath(ctx, options, fields);
+
+            let {
+                uploadForder,
+                uploadFileName
+            } = beforeUploadFileInfo;
+
+            if (uploadConfigInfo.type == 'local') {
+                returnPath = imgPath;
+            } else if (uploadConfigInfo.type == 'qn') {
+                let currentUploadForder = options.static_root_path ? `${options.static_root_path}/${uploadForder}` : uploadForder;
+                let targetKey = path.join(currentUploadForder, `${uploadFileName}`)
+                returnPath = await uploadByQiniu(fileDataType, localImgPath, targetKey, uploadConfigInfo);
+            } else if (uploadConfigInfo.type == 'oss') {
+                let currentUploadForder = options.static_root_path ? `${options.static_root_path}/${uploadForder}` : uploadForder;
+                let targetKey = path.join(currentUploadForder, `${uploadFileName}`)
+                returnPath = await uploadByAliOss(fileDataType, localImgPath, targetKey, uploadConfigInfo);
+            }
+
+            // 设置响应内容和响应状态码
+            ctx.helper.renderSuccess(ctx, {
+                data: {
+                    path: returnPath
+                }
+            });
+
+        } catch (error) {
+            ctx.helper.renderFail(ctx, {
+                message: error
+            });
+        }
+
+    },
 
 }
 
