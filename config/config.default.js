@@ -17,7 +17,7 @@ exports.doraUploadFile = {
     isindex: 0, // 是否需要前台访问，1：需要，0：不需要,入口地址:'/ext/devteam/index/index'
     version: pkgInfo.version, // 版本号
     iconName: 'icon_service', // 主菜单图标名称
-    adminUrl: 'https://cdn.html-js.cn/cms/plugins/static/admin/uploadFile/js/app.js',
+    adminUrl: '/uploadFile/js/app.js',
     adminApi: [{
         url: 'uploadFile/getList',
         method: 'get',
@@ -50,6 +50,11 @@ exports.doraUploadFile = {
         controllerName: 'create',
         details: '文件上传',
     }, {
+        url: 'upload/filePath',
+        method: 'post',
+        controllerName: 'createFileByPath',
+        details: '文件上传(根据路径)',
+    }, {
         url: 'upload/ueditor',
         method: 'get',
         controllerName: 'ueditor',
@@ -64,8 +69,7 @@ exports.doraUploadFile = {
     initData: '', // 初始化数据脚本
     pluginsConfig: ` 
     exports.doraUploadFile = {\n
-        enable: true,\n
-         \n
+        enable: true,\n        package: 'egg-dora-uploadfile',
     };\n
     `, // 插入到 plugins.js 中的配置
     defaultConfig: `
