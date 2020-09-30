@@ -350,7 +350,8 @@ let UploadFileController = {
             let result = {}
             let {
                 action,
-                start = 0
+                start = 0,
+                callback
             } = ctx.query
             start = parseInt(start)
 
@@ -527,7 +528,12 @@ let UploadFileController = {
                 }
             }
 
-            ctx.body = JSON.stringify(result);
+            if (action === 'config' && callback) {
+                ctx.set('Content-Type', 'application/json; charset=utf-8')
+                ctx.body = `${callback}(${JSON.stringify(result)})`
+            } else {
+                ctx.body = JSON.stringify(result);
+            }
 
         } catch (error) {
             ctx.body = JSON.stringify({
